@@ -1,0 +1,622 @@
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sunrise Pádel – Gestor</title>
+
+  <!-- React + Babel + Tailwind (desarrollo) -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Firebase compat (Auth) -->
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+  <script>
+    const ADMIN_EMAIL = "sunrisepadelmadrid@gmail.com";
+    const firebaseConfig = {
+      apiKey: "AIzaSyD0mViwKfndKe3KePleZAyUijx8apZ3lZA",
+      authDomain: "sunrise-530d2.firebaseapp.com",
+      projectId: "sunrise-530d2",
+      storageBucket: "sunrise-530d2.firebasestorage.app",
+      messagingSenderId: "827003466891",
+      appId: "1:827003466891:web:dc736dac1da05cfb4f508e"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+  </script>
+
+  <style>
+    .lucide-icon{width:1em;height:1em;display:inline-block;vertical-align:-0.125em}
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div id="root"></div>
+
+  <!-- ÚNICO script Babel -->
+  <script type="text/babel" data-presets="env,react">
+    const { useState, useEffect } = React;
+
+    // Iconos simples
+    const Icon = ({name, size=16, className=""}) => {
+      const icons = {Users:"👥", Trophy:"🏆", Calendar:"📅", Settings:"⚙️", UserCheck:"✅", Plus:"+", Edit2:"✏️", Save:"💾", X:"❌"};
+      return <span className={`lucide-icon ${className}`} style={{fontSize:`${size}px`}}>{icons[name]||"•"}</span>;
+    };
+
+    // Reglas de puntuación y distribución de pistas
+    const ORDER = [1,4,7,10,11,8,5,2,3,6,9,12];
+    const orderedCourts = (n) => ORDER.filter(x => x >= 1 && x <= n);
+    const basePts = (court, n) => { const a=orderedCourts(n); const i=a.indexOf(court); return i===-1 ? 0 : (a.length - i); };
+    const rankOf  = (court, n) => { const a=orderedCourts(n); const i=a.indexOf(court); return i===-1 ? null : (i+1); };
+    const gridFor = (n) => [[10,11,12],[7,8,9],[4,5,6],[1,2,3]].map(r=>r.filter(x=>x<=n)).filter(r=>r.length>0);
+
+    function App(){
+      // UI / Auth
+      const [view, setView]   = useState('player'); // 'player' | 'admin'
+      const [authed, setAuth] = useState(false);
+
+      // Datos
+      const [players, setPlayers]   = useState([]);
+      const [gamedays, setGamedays] = useState([]);
+      const [current, setCurrent]   = useState(null);
+
+      // Precio
+      const [price, setPrice]       = useState(15);
+      const [editingPrice, setEP]   = useState(false);
+      const [priceTmp, setPriceTmp] = useState(15);
+
+      // Formularios
+      const [showAddPlayer, setSAP] = useState(false);
+      const [showAddDay, setSAD]    = useState(false);
+      const [editPlayer, setEditP]  = useState(null);
+      const [newPlayer, setNewP]    = useState({name:'', level:2, balance:0});
+      const [newDay, setNewD]       = useState({name:'', date:new Date().toISOString().split('T')[0], numCourts:6});
+
+      // Cargar / guardar localStorage
+      useEffect(()=>{
+        const sp=localStorage.getItem('padelPlayers'); if(sp) setPlayers(JSON.parse(sp));
+        const sg=localStorage.getItem('padelGamedays'); if(sg) setGamedays(JSON.parse(sg));
+        const pr=localStorage.getItem('jorneyPrice');  if(pr){ const v=parseFloat(pr); setPrice(v); setPriceTmp(v); }
+      },[]);
+      useEffect(()=>localStorage.setItem('padelPlayers', JSON.stringify(players)), [players]);
+      useEffect(()=>localStorage.setItem('padelGamedays', JSON.stringify(gamedays)), [gamedays]);
+      useEffect(()=>localStorage.setItem('jorneyPrice', String(price)), [price]);
+
+      // Guard de admin por email
+      useEffect(()=>{
+        return auth.onAuthStateChanged(u=>{
+          const ok = !!u && u.email === ADMIN_EMAIL;
+          setAuth(ok);
+          if(!ok && view==='admin') setView('player');
+        });
+      },[view]);
+
+      // --- Jugadores ---
+      const addPlayer = () => {
+        if(!newPlayer.name.trim()) return;
+        const p = {
+          id: Date.now(),
+          name: newPlayer.name.trim(),
+          level: newPlayer.level,
+          balance: newPlayer.balance,
+          totalPoints: 0,
+          gamesHistory: [],
+          balanceHistory: [{date:new Date().toISOString(), amount:newPlayer.balance, description:'Saldo inicial', type:'initial'}]
+        };
+        setPlayers(ps => [...ps, p]);
+        setNewP({name:'', level:2, balance:0});
+        setSAP(false);
+      };
+      const setLevel = (id, level) => setPlayers(ps => ps.map(p => p.id===id ? {...p, level} : p));
+      const adjBalance = (id, amount, desc, type='manual') =>
+        setPlayers(ps => ps.map(p => p.id===id
+          ? {...p, balance:p.balance+amount, balanceHistory:[...p.balanceHistory, {date:new Date().toISOString(), amount, description:desc, type}]}
+          : p
+        ));
+
+      // --- Jornadas ---
+      const addDay = () => {
+        if(!newDay.name.trim()) return;
+        const n = Math.max(1, Math.min(12, newDay.numCourts));
+        const d = {id:Date.now(), name:newDay.name.trim(), date:newDay.date, numCourts:n, enrolledPlayers:[], results:[]};
+        setGamedays(gs => [...gs, d]);
+        setNewD({name:'', date:new Date().toISOString().split('T')[0], numCourts:6});
+        setSAD(false);
+      };
+      const enroll = (gid, pid) => {
+        const day = gamedays.find(g=>g.id===gid);
+        setGamedays(gs => gs.map(g => g.id===gid ? {...g, enrolledPlayers: g.enrolledPlayers.includes(pid) ? g.enrolledPlayers : [...g.enrolledPlayers, pid]} : g));
+        adjBalance(pid, -price, `Inscripción ${day?.name}`, 'enrollment');
+      };
+      const unenroll = (gid, pid) => {
+        const day = gamedays.find(g=>g.id===gid);
+        setGamedays(gs => gs.map(g => g.id===gid ? {...g, enrolledPlayers: g.enrolledPlayers.filter(x=>x!==pid)} : g));
+        adjBalance(pid, price, `Cancelación ${day?.name}`, 'cancellation');
+      };
+
+      // --- Puntuación ---
+      const calc = (court, n, won) => basePts(court, n) + (won ? 1 : 0);
+      const submitPoints = (playerName, court, won) => {
+        const p = players.find(x => x.name.toLowerCase() === playerName.toLowerCase());
+        if(!p || !current) return false;
+        if(!current.enrolledPlayers.includes(p.id)) return false;
+
+        const pts = calc(court, current.numCourts, won);
+        const had = current.results.find(r => r.playerId === p.id);
+
+        if(had){
+          setGamedays(gs => gs.map(g => g.id===current.id
+            ? {...g, results: g.results.map(r => r.playerId===p.id ? {...r, points:pts, courtNumber:court, wonLastGame:won, date:new Date().toISOString()} : r)}
+            : g
+          ));
+        }else{
+          setGamedays(gs => gs.map(g => g.id===current.id
+            ? {...g, results: [...g.results, {playerId:p.id, points:pts, courtNumber:court, wonLastGame:won, date:new Date().toISOString()}]}
+            : g
+          ));
+        }
+
+        setPlayers(ps => ps.map(x => x.id===p.id ? {
+          ...x,
+          totalPoints: x.totalPoints + pts - (had ? had.points : 0),
+          gamesHistory: had
+            ? x.gamesHistory.map(gm => gm.gamedayId===current.id ? {...gm, points:pts, courtNumber:court, numCourts:current.numCourts, wonLastGame:won, date:new Date().toISOString()} : gm)
+            : [...x.gamesHistory, {gamedayId:current.id, gamedayName:current.name, points:pts, courtNumber:court, numCourts:current.numCourts, wonLastGame:won, date:new Date().toISOString()}]
+        } : x));
+        return true;
+      };
+
+      // --- Subcomponentes que usan el estado por cierre ---
+      const CourtMap = ({n, sel, onSel}) => {
+        const grid = gridFor(n);
+        return (
+          <div className="space-y-3">
+            <div className="text-sm text-gray-600">Orden de puntos: <strong>1 → 4 → 7 → 10 → 11 → 8 → 5 → 2 → 3 → 6 → 9 → 12</strong></div>
+            <div className="space-y-3">
+              {grid.map((row,i)=>(
+                <div key={i} className="grid grid-cols-3 gap-3">
+                  {row.map(c=>{
+                    const r = rankOf(c, n);
+                    const pts = basePts(c, n);
+                    const active = sel===c;
+                    return (
+                      <button
+                        key={c}
+                        onClick={()=>onSel(c)}
+                        className={`p-3 rounded-lg border shadow-sm text-left ${active ? 'border-blue-500 ring-2 ring-blue-300 bg-blue-50' : 'border-gray-200 bg-white'}`}
+                        title={`Pista ${c} · ${pts} pts base (orden #${r})`}
+                      >
+                        <div className="text-sm font-semibold">Pista {c}</div>
+                        <div className="text-xs text-gray-600">Pts base: <b>{pts}</b></div>
+                        <div className="text-xs text-gray-600">Orden: #{r}</div>
+                      </button>
+                    );
+                  })}
+                  {Array.from({length:3-row.length}).map((_,k)=>(<div key={`gap-${i}-${k}`} className="p-3 rounded-lg border border-dashed border-gray-200 opacity-40"></div>))}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      };
+
+      const PlayerCard = ({p, onClose}) => (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-2xl font-bold">{p.name}</h3>
+                <button onClick={onClose} className="text-gray-500 hover:text-gray-700"><Icon name="X" size={24}/></button>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-blue-100 p-4 rounded"><div className="text-2xl font-bold text-blue-800">{p.level}</div><div className="text-sm text-blue-600">Nivel</div></div>
+                <div className="bg-green-100 p-4 rounded"><div className="text-2xl font-bold text-green-800">{p.totalPoints}</div><div className="text-sm text-green-600">Puntos Totales</div></div>
+                <div className={`p-4 rounded ${p.balance>=0?'bg-green-100':'bg-red-100'}`}>
+                  <div className={`text-2xl font-bold ${p.balance>=0?'text-green-800':'text-red-800'}`}>{p.balance.toFixed(2)}€</div>
+                  <div className={`text-sm ${p.balance>=0?'text-green-600':'text-red-600'}`}>Saldo</div>
+                </div>
+                <div className="bg-purple-100 p-4 rounded"><div className="text-2xl font-bold text-purple-800">{p.gamesHistory.length}</div><div className="text-sm text-purple-600">Partidas</div></div>
+              </div>
+
+              <div className="bg-gray-50 p-4 rounded mb-6">
+                <h4 className="font-semibold mb-2">Ajustar Saldo</h4>
+                <div className="flex gap-2">
+                  <input id={`bal-${p.id}`} type="number" placeholder="Cantidad" className="px-3 py-2 border rounded flex-1" step="0.5"/>
+                  <input id={`desc-${p.id}`} type="text" placeholder="Descripción" className="px-3 py-2 border rounded flex-1"/>
+                  <button
+                    onClick={()=>{
+                      const amount = parseFloat(document.getElementById(`bal-${p.id}`).value) || 0;
+                      const desc = document.getElementById(`desc-${p.id}`).value || 'Ajuste manual';
+                      if(amount!==0){
+                        adjBalance(p.id, amount, desc, 'manual');
+                        document.getElementById(`bal-${p.id}`).value='';
+                        document.getElementById(`desc-${p.id}`).value='';
+                      }
+                    }}
+                    className="px-4 py-2 bg-blue-500 text-white rounded"
+                  >Ajustar</button>
+                </div>
+              </div>
+
+              <div className="mb-6">
+                <h4 className="font-semibold mb-2">Historial de Partidas</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full table-auto border">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="px-3 py-2 text-left border">Jornada</th>
+                        <th className="px-3 py-2 text-center border">Pista Final</th>
+                        <th className="px-3 py-2 text-center border">Posición</th>
+                        <th className="px-3 py-2 text-center border">Ganó Último</th>
+                        <th className="px-3 py-2 text-center border">Puntos</th>
+                        <th className="px-3 py-2 text-center border">Fecha</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {p.gamesHistory.map((g,i)=>(
+                        <tr key={i} className={i%2===0?'bg-gray-50':'bg-white'}>
+                          <td className="px-3 py-2 border">{g.gamedayName}</td>
+                          <td className="px-3 py-2 text-center border">{g.courtNumber}</td>
+                          <td className="px-3 py-2 text-center border">{rankOf(g.courtNumber, g.numCourts) ?? '-'}º</td>
+                          <td className="px-3 py-2 text-center border">{g.wonLastGame ? '✅' : '❌'}</td>
+                          <td className="px-3 py-2 text-center border font-bold">{g.points}</td>
+                          <td className="px-3 py-2 text-center border">{new Date(g.date).toLocaleDateString('es-ES')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="font-semibold mb-2">Historial de Saldo</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full table-auto border">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="px-3 py-2 text-left border">Fecha</th>
+                        <th className="px-3 py-2 text-left border">Descripción</th>
+                        <th className="px-3 py-2 text-center border">Importe</th>
+                        <th className="px-3 py-2 text-center border">Tipo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {p.balanceHistory.map((t,i)=>(
+                        <tr key={i} className={i%2===0?'bg-gray-50':'bg-white'}>
+                          <td className="px-3 py-2 border">{new Date(t.date).toLocaleDateString('es-ES')}</td>
+                          <td className="px-3 py-2 border">{t.description}</td>
+                          <td className={`px-3 py-2 text-center border font-bold ${t.amount>=0?'text-green-600':'text-red-600'}`}>{t.amount>=0?'+':''}{t.amount.toFixed(2)}€</td>
+                          <td className="px-3 py-2 text-center border text-sm">
+                            {t.type==='initial' && '🔰 Inicial'}
+                            {t.type==='enrollment' && '📝 Inscripción'}
+                            {t.type==='cancellation' && '❌ Cancelación'}
+                            {t.type==='manual' && '✏️ Manual'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      );
+
+      const AdminView = () => (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <h2 className="text-2xl font-bold">Panel de Administración</h2>
+            <div className="flex gap-2 items-center">
+              <button onClick={()=>setEP(!editingPrice)} className="px-3 py-1 bg-blue-500 text-white rounded flex items-center gap-1"><Icon name="Edit2"/> Precio: {price}€</button>
+              <button onClick={()=>auth.signOut()} className="px-3 py-1 bg-gray-200 rounded">Salir</button>
+            </div>
+          </div>
+
+          {editingPrice && (
+            <div className="bg-gray-100 p-4 rounded">
+              <div className="flex items-center gap-2">
+                <input type="number" value={priceTmp} onChange={(e)=>setPriceTmp(parseFloat(e.target.value)||0)} className="px-2 py-1 border rounded w-20" step="0.5"/>
+                <span>€</span>
+                <button onClick={()=>{setPrice(priceTmp); setEP(false);}} className="px-2 py-1 bg-green-500 text-white rounded flex items-center gap-1"><Icon name="Save"/></button>
+                <button onClick={()=>{setPriceTmp(price); setEP(false);}} className="px-2 py-1 bg-red-500 text-white rounded flex items-center gap-1"><Icon name="X"/></button>
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white p-6 rounded-lg shadow">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold flex items-center gap-2"><Icon name="Users" size={20}/>Gestión de Jugadores ({players.length})</h3>
+              <button onClick={()=>setSAP(true)} className="px-4 py-2 bg-green-500 text-white rounded flex items-center gap-2"><Icon name="Plus"/>Añadir Jugador</button>
+            </div>
+
+            {showAddPlayer && (
+              <div className="bg-gray-50 p-4 rounded mb-4">
+                <div className="grid grid-cols-3 gap-4 mb-3">
+                  <input type="text" placeholder="Nombre del jugador" value={newPlayer.name} onChange={(e)=>setNewP({...newPlayer, name:e.target.value})} className="px-3 py-2 border rounded"/>
+                  <select value={newPlayer.level} onChange={(e)=>setNewP({...newPlayer, level:parseInt(e.target.value)})} className="px-3 py-2 border rounded">
+                    <option value={1}>Nivel 1 (Principiante)</option>
+                    <option value={2}>Nivel 2 (Intermedio)</option>
+                    <option value={3}>Nivel 3 (Avanzado)</option>
+                    <option value={4}>Nivel 4 (Experto)</option>
+                  </select>
+                  <input type="number" placeholder="Saldo inicial" value={newPlayer.balance} onChange={(e)=>setNewP({...newPlayer, balance:parseFloat(e.target.value)||0})} className="px-3 py-2 border rounded"/>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={addPlayer} className="px-4 py-2 bg-blue-500 text-white rounded">Añadir</button>
+                  <button onClick={()=>setSAP(false)} className="px-4 py-2 bg-gray-500 text-white rounded">Cancelar</button>
+                </div>
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full table-auto">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="px-4 py-2 text-left">Nombre</th>
+                    <th className="px-4 py-2 text-center">Nivel</th>
+                    <th className="px-4 py-2 text-center">Puntos</th>
+                    <th className="px-4 py-2 text-center">Saldo</th>
+                    <th className="px-4 py-2 text-center">Partidas</th>
+                    <th className="px-4 py-2 text-center">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...players].sort((a,b)=>b.totalPoints-a.totalPoints).map((p,i)=>(
+                    <tr key={p.id} className={i%2===0?'bg-gray-50':'bg-white'}>
+                      <td className="px-4 py-2 font-medium">{p.name}</td>
+                      <td className="px-4 py-2 text-center">
+                        <select value={p.level} onChange={(e)=>setLevel(p.id, parseInt(e.target.value))} className="px-2 py-1 border rounded text-sm">
+                          <option value={1}>1</option><option value={2}>2</option><option value={3}>3</option><option value={4}>4</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-2 text-center font-bold">{p.totalPoints}</td>
+                      <td className={`px-4 py-2 text-center font-bold ${p.balance>=0?'text-green-600':'text-red-600'}`}>{p.balance.toFixed(2)}€</td>
+                      <td className="px-4 py-2 text-center">{p.gamesHistory.length}</td>
+                      <td className="px-4 py-2 text-center">
+                        <button onClick={()=>setEditP(p)} className="px-2 py-1 bg-blue-500 text-white rounded text-sm">Ver Ficha</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {editPlayer && <PlayerCard p={editPlayer} onClose={()=>setEditP(null)} />}
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-semibold flex items-center gap-2"><Icon name="Calendar" size={20}/>Gestión de Jornadas ({gamedays.length})</h3>
+              <button onClick={()=>setSAD(true)} className="px-4 py-2 bg-green-500 text-white rounded flex items-center gap-2"><Icon name="Plus"/>Nueva Jornada</button>
+            </div>
+
+            {showAddDay && (
+              <div className="bg-gray-50 p-4 rounded mb-4">
+                <div className="grid grid-cols-3 gap-4 mb-3">
+                  <input type="text" placeholder="Nombre de la jornada" value={newDay.name} onChange={(e)=>setNewD({...newDay, name:e.target.value})} className="px-3 py-2 border rounded"/>
+                  <input type="date" value={newDay.date} onChange={(e)=>setNewD({...newDay, date:e.target.value})} className="px-3 py-2 border rounded"/>
+                  <input type="number" min="1" max="12" placeholder="Número de pistas" value={newDay.numCourts} onChange={(e)=>setNewD({...newDay, numCourts:parseInt(e.target.value)||6})} className="px-3 py-2 border rounded"/>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={addDay} className="px-4 py-2 bg-blue-500 text-white rounded">Crear</button>
+                  <button onClick={()=>setSAD(false)} className="px-4 py-2 bg-gray-500 text-white rounded">Cancelar</button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {gamedays.map(g=>(
+                <div key={g.id} className="border rounded-lg p-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <h4 className="text-lg font-semibold">{g.name}</h4>
+                    <div className="flex gap-2">
+                      <span className="text-sm text-gray-600">{g.date}</span>
+                      <span className="text-sm text-gray-600">{g.numCourts} pistas</span>
+                      <button onClick={()=>setCurrent(current?.id===g.id ? null : g)} className={`px-3 py-1 rounded text-sm ${current?.id===g.id ? 'bg-green-500 text-white' : 'bg-gray-200'}`}>{current?.id===g.id ? 'Activa' : 'Activar'}</button>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 text-sm">
+                    <span>Inscritos: {g.enrolledPlayers.length}</span>
+                    <span>Resultados: {g.results.length}</span>
+                  </div>
+
+                  <div className="mt-4">
+                    <h5 className="font-medium mb-2">Inscripciones:</h5>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      {players.map(p=>{
+                        const on = g.enrolledPlayers.includes(p.id);
+                        return (
+                          <button key={p.id} onClick={()=>on ? unenroll(g.id, p.id) : enroll(g.id, p.id)} className={`px-2 py-1 rounded text-sm ${on ? 'bg-green-200 text-green-800' : 'bg-gray-200 text-gray-700'}`}>
+                            {p.name} {on ? '✓' : '○'}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-xl font-semibold mb-4 flex items-center gap-2"><Icon name="Trophy" size={20}/>Clasificación General</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full table-auto">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="px-4 py-2 text-center">Posición</th>
+                    <th className="px-4 py-2 text-left">Jugador</th>
+                    <th className="px-4 py-2 text-center">Nivel</th>
+                    <th className="px-4 py-2 text-center">Puntos</th>
+                    <th className="px-4 py-2 text-center">Partidas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...players].sort((a,b)=>b.totalPoints-a.totalPoints).map((p,i)=>(
+                    <tr key={p.id} className={i%2===0?'bg-gray-50':'bg-white'}>
+                      <td className="px-4 py-2 text-center font-bold">{i+1}{i===0&&'🏆'}{i===1&&'🥈'}{i===2&&'🥉'}</td>
+                      <td className="px-4 py-2 font-medium">{p.name}</td>
+                      <td className="px-4 py-2 text-center">{p.level}</td>
+                      <td className="px-4 py-2 text-center font-bold">{p.totalPoints}</td>
+                      <td className="px-4 py-2 text-center">{p.gamesHistory.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+
+      const PlayerView = () => {
+        const [name, setName] = useState('');
+        const [court, setCourt] = useState(1);
+        const [won, setWon] = useState(false);
+        const [msg, setMsg] = useState('');
+
+        const options = current ? orderedCourts(current.numCourts) : [];
+        const bp = current ? basePts(court, current.numCourts) : 0;
+
+        const submit = () => {
+          if(!name.trim()){ setMsg('Por favor, introduce tu nombre'); return; }
+          if(!current){ setMsg('No hay ninguna jornada activa'); return; }
+          const ok = submitPoints(name, court, won);
+          if(ok){ setMsg('¡Puntos guardados correctamente!'); setName(''); setCourt(1); setWon(false); setTimeout(()=>setMsg(''), 3000); }
+          else{ setMsg('No se encontró el jugador o no está inscrito'); }
+        };
+
+        return (
+          <div className="max-w-5xl mx-auto space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold mb-2">Registro de Puntos</h2>
+              {current ? <p className="text-gray-600">Jornada Activa: {current.name} · <b>{current.numCourts}</b> pistas</p> : <p className="text-red-600">No hay jornada activa</p>}
+            </div>
+
+            {current && (
+              <div className="bg-white p-6 rounded-lg shadow space-y-6">
+                <div className="grid md:grid-cols-2 gap-6">
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Tu nombre:</label>
+                      <input type="text" value={name} onChange={(e)=>setName(e.target.value)} placeholder="Introduce tu nombre exacto" className="w-full px-3 py-2 border rounded-lg"/>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Pista (ordenada por puntos):</label>
+                      <select value={court} onChange={(e)=>setCourt(parseInt(e.target.value))} className="w-full px-3 py-2 border rounded-lg">
+                        {options.map(c=>(<option key={c} value={c}>{`Pista ${c} (${basePts(c, current.numCourts)} pts base)`}</option>))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={won} onChange={(e)=>setWon(e.target.checked)} className="rounded"/>
+                        <span>¿Ganaste el último partido? (+1 punto extra)</span>
+                      </label>
+                    </div>
+
+                    <div className="bg-gray-100 p-3 rounded text-sm">
+                      <strong>Puntos a obtener:</strong> {current ? basePts(court, current.numCourts)+(won?1:0) : 0} puntos
+                      <br/>({bp} base + {won ? 1 : 0} extra)
+                    </div>
+
+                    <button onClick={submit} className="w-full px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600">Registrar Puntos</button>
+
+                    {msg && <div className={`p-3 rounded ${msg.includes('correctamente') ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>{msg}</div>}
+                  </div>
+
+                  <div>
+                    <h4 className="font-semibold mb-2">Mapa de Pistas</h4>
+                    <CourtMap n={current.numCourts} sel={court} onSel={setCourt}/>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white p-6 rounded-lg shadow">
+              <h3 className="text-xl font-semibold mb-4 flex items-center gap-2"><Icon name="Trophy" size={20}/>Clasificación Actual</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full table-auto">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="px-4 py-2 text-center">Pos</th>
+                      <th className="px-4 py-2 text-left">Jugador</th>
+                      <th className="px-4 py-2 text-center">Puntos</th>
+                      <th className="px-4 py-2 text-center">Partidas</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...players].sort((a,b)=>b.totalPoints-a.totalPoints).map((p,i)=>(
+                      <tr key={p.id} className={i%2===0?'bg-gray-50':'bg-white'}>
+                        <td className="px-4 py-2 text-center font-bold">{i+1}{i===0&&'🏆'}{i===1&&'🥈'}{i===2&&'🥉'}</td>
+                        <td className="px-4 py-2 font-medium">{p.name}</td>
+                        <td className="px-4 py-2 text-center font-bold">{p.totalPoints}</td>
+                        <td className="px-4 py-2 text-center">{p.gamesHistory.length}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // Botón "Administrador": login Google + verificación de email
+      const onAdminClick = async ()=>{
+        if(location.protocol==='file:'){
+          alert("Ábrelo en HTTP.\nCMD:\ncd C:\\Users\\petru\\Desktop\\SUNRISE\nnpx serve -p 5173 .\nLuego http://localhost:5173");
+          return;
+        }
+        if(!authed){
+          try{
+            const provider = new firebase.auth.GoogleAuthProvider();
+            const res = await auth.signInWithPopup(provider);
+            const u = res.user;
+            if(u.email !== ADMIN_EMAIL){
+              await auth.signOut();
+              alert("Este correo no está autorizado.");
+              return;
+            }
+            setView('admin');
+          }catch(e){
+            alert("No se pudo iniciar sesión: " + (e.message || e.code || e));
+          }
+        }else{
+          setView('admin');
+        }
+      };
+
+      // Layout principal
+      return (
+        <div className="min-h-screen">
+          <div className="bg-white shadow-sm">
+            <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-blue-800">🎾 Sunrise Pádel</h1>
+              <div className="flex gap-2">
+                <button onClick={onAdminClick} className={`px-4 py-2 rounded flex items-center gap-2 ${view==='admin'?'bg-blue-500 text-white':'bg-gray-200'}`}><Icon name="Settings"/> Administrador</button>
+                <button onClick={()=>setView('player')} className={`px-4 py-2 rounded flex items-center gap-2 ${view==='player'?'bg-blue-500 text-white':'bg-gray-200'}`}><Icon name="UserCheck"/> Jugador</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="max-w-7xl mx-auto px-4 py-6">
+            {view==='admin' && authed ? <AdminView/> : <PlayerView/>}
+          </div>
+        </div>
+      );
+    }
+
+    // Montaje React 18 – nada después de estas dos líneas
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
