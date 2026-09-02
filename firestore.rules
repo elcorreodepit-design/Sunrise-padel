@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'sunrisepadelmadrid@gmail.com';
+    }
+
+    match /players/{id} { allow read, write: if isAdmin(); }
+    match /pools/{id} { allow read, write: if isAdmin(); }
+    match /registrations/{id} { allow read, write: if isAdmin(); }
+    match /courtAssignments/{id} { allow read, write: if isAdmin(); }
+    match /results/{id} { allow read, write: if isAdmin(); }
+    match /bonuses/{id} { allow read, write: if isAdmin(); }
+    match /bonusTransactions/{id} { allow read, write: if isAdmin(); }
+    match /freePlays/{id} { allow read, write: if isAdmin(); }
+    match /payments/{id} { allow read, write: if isAdmin(); }
+    match /expenses/{id} { allow read, write: if isAdmin(); }
+    match /rankingSnapshots/{id} { allow read, write: if isAdmin(); }
+    match /settings/{id} { allow read, write: if isAdmin(); }
+    match /auditLogs/{id} { allow read, write: if isAdmin(); }
+
+    match /{document=**} { allow read, write: if false; }
+  }
+}
