@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sunrise Firebase Test</title><style>body{font-family:system-ui;max-width:720px;margin:40px auto;padding:20px}input,button{padding:10px;margin:5px 0;width:100%;box-sizing:border-box}button{cursor:pointer}.ok{color:#087f5b}.err{color:#c92a2a}pre{background:#f4f4f4;padding:12px;white-space:pre-wrap}</style></head>
+<body>
+<h1>☀️ Sunrise Firebase</h1><p>Prueba de conexión a Authentication + Firestore.</p>
+<div id="status">Conectando…</div>
+<h2>Acceso administrador</h2>
+<input id="email" type="email" value="sunrisepadelmadrid@gmail.com" placeholder="Email">
+<input id="password" type="password" placeholder="Contraseña de Firebase">
+<button id="login">Entrar</button><button id="logout">Cerrar sesión</button>
+<h2>Prueba Firestore</h2>
+<button id="seed">Crear/actualizar configuración Sunrise</button>
+<pre id="log"></pre>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore-compat.js"></script>
+<script src="firebase-init.js"></script>
+<script>
+const $=id=>document.getElementById(id); const log=m=>{$('log').textContent=new Date().toLocaleTimeString()+' — '+m};
+auth.onAuthStateChanged(user=>{ $('status').innerHTML=user?'<span class="ok">✓ Conectado como '+user.email+'</span>':'No hay sesión iniciada'; });
+$('login').onclick=async()=>{try{await auth.signInWithEmailAndPassword($('email').value,$('password').value);log('Login correcto.')}catch(e){log('ERROR login: '+e.code+' — '+e.message)}};
+$('logout').onclick=()=>auth.signOut();
+$('seed').onclick=async()=>{try{if(!auth.currentUser)throw new Error('Inicia sesión primero');await db.collection('settings').doc('global').set({price:15,playersPerCourt:4,courtOrder:[12,9,6,3,2,5,8,11,10,7,4,1],levelVariation:0.4,rankingBestScores:8,updatedAt:firebase.firestore.FieldValue.serverTimestamp()},{merge:true});log('✓ Firestore OK: settings/global guardado.')}catch(e){log('ERROR Firestore: '+e.code+' — '+e.message)}};
+</script></body></html>
